@@ -1,0 +1,292 @@
+/**
+ * Google Apps Script untuk Lead Management TumbuhUMKM
+ * 
+ * CARA SETUP:
+ * 1. Buka Google Sheets baru
+ * 2. Klik Extensions > Apps Script
+ * 3. Hapus semua kode default
+ * 4. Copy-paste semua kode ini
+ * 5. Ganti SHEET_ID dengan ID Google Sheets Anda
+ * 6. Deploy sebagai Web App
+ * 7. Copy URL Web App dan paste di src/services/leadService.ts
+ */
+
+// GANTI DENGAN ID GOOGLE SHEETS ANDA
+// ID bisa ditemukan di URL: https://docs.google.com/spreadsheets/d/[ID_DISINI]/edit
+const SHEET_ID = 'YOUR_GOOGLE_SHEET_ID_HERE';
+
+/**
+ * Handle POST request dari frontend
+ */
+function doPost(e) {
+  try {
+    // Parse data dari request
+    const data = JSON.parse(e.postData.contents);
+    
+    // Validasi data
+    const validation = validateLeadData(data);
+    if (!validation.valid) {
+      return createErrorResponse('Validasi gagal: ' + validation.errors.join(', '));
+    }
+    
+    // Simpan ke Google Sheets
+    const result = saveToSheet(data);
+    
+    if (result.success) {
+      return createSuccessResponse(result.leadId, 'Data berhasil disimpan');
+    } else {
+      return createErrorResponse(result.error);
+    }
+    
+  } catch (error) {
+    console.error('Error:', error);
+    return createErrorResponse('Terjadi kesalahan: ' + error.message);
+  }
+}
+
+/**
+ * Handle GET request (untuk testing)
+ */
+function doGet(e) {
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      success: true,
+      message: 'TumbuhUMKM Lead Management API is running',
+      timestamp: new Date().toISOString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Validasi data lead
+ */
+function validateLeadData(data) {
+  const errors = [];
+  
+  if (!data.nama || data.nama.trim().length < 2) {
+    errors.push('Nama lengkap harus diisi');
+  }
+  
+  if (!data.namaUsaha || data.namaUsaha.trim().length < 2) {
+    errors.push('Nama usaha harus diisi');
+  }
+  
+  if (!data.whatsapp || !/^[0-9+\-\s()]{10,}$/.test(data.whatsapp)) {
+    errors.push('Nomor WhatsApp tidak valid');
+  }
+  
+  if (!data.layanan) {
+    errors.push('Jenis layanan harus dipilih');
+  }
+  
+  if (!data.kebutuhan || data.kebutuhan.trim().length < 10) {
+    errors.push('Deskripsi kebutuhan harus diisi');
+  }
+  
+  return {
+    valid: errors.length === 0,
+    errors: errors
+  };
+}
+
+/**
+ * Simpan data ke Google Sheets
+ */
+function saveToSheet(data) {
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    let sheet = ss.getSheetByName('Leads');
+    
+    // Buat sheet baru jika belum ada
+    if (!sheet) {
+      sheet = ss.insertSheet('Leads');
+      
+      // Tambah header
+      const headers = [
+        'ID Lead',
+        'Timestamp',
+        'Tanggal',
+        'Waktu',
+        'Nama Lengkap',
+        'Nama Usaha',
+        'WhatsApp',
+        'Layanan',
+        'Paket',
+        'Anggaran',
+        'Kebutuhan',
+        'Sumber Halaman',
+        'Status',
+        'Catatan Tindak Lanjut'
+      ];
+      
+      sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+      
+      // Format header
+      sheet.getRange(1, 1, 1, headers.length)
+        .setFontWeight('bold')
+        .setBackground('#10b981')
+        .setFontColor('#ffffff');
+      
+      // Set lebar kolom
+      sheet.setColumnWidth(1, 150); // ID Lead
+      sheet.setColumnWidth(2, 180); // Timestamp
+      sheet.setColumnWidth(3, 120); // Tanggal
+      sheet.setColumnWidth(4, 100); // Waktu
+      sheet.setColumnWidth(5, 200); // Nama
+      sheet.setColumnWidth(6, 200); // Nama Usaha
+      sheet.setColumnWidth(7, 150); // WhatsApp
+      sheet.setColumnWidth(8, 200); // Layanan
+      sheet.setColumnWidth(9, 150); // Paket
+      sheet.setColumnWidth(10, 150); // Anggaran
+      sheet.setColumnWidth(11, 400); // Kebutuhan
+      sheet.setColumnWidth(12, 150); // Sumber
+      sheet.setColumnWidth(13, 120); // Status
+      sheet.setColumnWidth(14, 300); // Catatan
+      
+      // Freeze header row
+      sheet.setFrozenRows(1);
+    }
+    
+    // Generate ID lead
+    const leadId = data.leadId || generateLeadId();
+    
+    // Parse timestamp
+    const timestamp = new Date(data.timestamp || new Date());
+    const tanggal = Utilities.formatDate(timestamp, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+    const waktu = Utilities.formatDate(timestamp, Session.getScriptTimeZone(), 'HH:mm:ss');
+    
+    // Siapkan data untuk disimpan
+    const row = [
+      leadId,
+      timestamp.toISOString(),
+      tanggal,
+      waktu,
+      data.nama,
+      data.namaUsaha,
+      data.whatsapp,
+      data.layanan,
+      data.paket || '',
+      data.anggaran || '',
+      data.kebutuhan,
+      data.sumberHalaman,
+      data.status || 'Baru',
+      data.catatan || ''
+    ];
+    
+    // Tambah data ke sheet
+    sheet.appendRow(row);
+    
+    // Format baris baru
+    const lastRow = sheet.getLastRow();
+    sheet.getRange(lastRow, 1, 1, row.length)
+      .setVerticalAlignment('middle');
+    
+    // Auto-sort berdasarkan timestamp (terbaru di atas)
+    // sheet.sort(2, false); // Uncomment jika ingin auto-sort
+    
+    return {
+      success: true,
+      leadId: leadId
+    };
+    
+  } catch (error) {
+    console.error('Error saving to sheet:', error);
+    return {
+      success: false,
+      error: 'Gagal menyimpan data: ' + error.message
+    };
+  }
+}
+
+/**
+ * Generate ID lead unik
+ */
+function generateLeadId() {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 8).toUpperCase();
+  return `LEAD-${timestamp}-${random}`;
+}
+
+/**
+ * Buat response sukses
+ */
+function createSuccessResponse(leadId, message) {
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      success: true,
+      leadId: leadId,
+      message: message,
+      timestamp: new Date().toISOString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Buat response error
+ */
+function createErrorResponse(error) {
+  return ContentService
+    .createTextOutput(JSON.stringify({
+      success: false,
+      error: error,
+      timestamp: new Date().toISOString()
+    }))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Fungsi untuk testing (jalankan manual di Apps Script editor)
+ */
+function testSaveLead() {
+  const testData = {
+    leadId: 'TEST-' + Date.now(),
+    timestamp: new Date().toISOString(),
+    nama: 'Test User',
+    namaUsaha: 'Test Business',
+    whatsapp: '08123456789',
+    layanan: 'Pembuatan Website',
+    paket: 'Website Bisnis',
+    anggaran: 'Rp 2.000.000',
+    kebutuhan: 'Butuh website untuk bisnis kuliner',
+    sumberHalaman: 'Halaman Konsultasi',
+    status: 'Baru',
+    catatan: ''
+  };
+  
+  const result = saveToSheet(testData);
+  console.log('Test result:', result);
+}
+
+/**
+ * Fungsi untuk melihat semua lead (untuk debugging)
+ */
+function getAllLeads() {
+  try {
+    const ss = SpreadsheetApp.openById(SHEET_ID);
+    const sheet = ss.getSheetByName('Leads');
+    
+    if (!sheet) {
+      console.log('Sheet Leads belum ada');
+      return [];
+    }
+    
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const leads = [];
+    
+    for (let i = 1; i < data.length; i++) {
+      const lead = {};
+      for (let j = 0; j < headers.length; j++) {
+        lead[headers[j]] = data[i][j];
+      }
+      leads.push(lead);
+    }
+    
+    console.log('Total leads:', leads.length);
+    return leads;
+    
+  } catch (error) {
+    console.error('Error getting leads:', error);
+    return [];
+  }
+}
